@@ -25,11 +25,20 @@ out vec2 texCoord0;
 const float PI = 3.141593;
 const float TWO_PI = 6.283185;
 
-const vec3 quad[4] = vec3[](
+const vec3 QUAD[4] = vec3[](
     vec3(1.0, 1.0, 0.0),
     vec3(1.0, 0.0, 0.0),
     vec3(0.0, 0.0, 0.0),
     vec3(0.0, 1.0, 0.0)
+);
+
+const vec3 normals[6] = vec3[](
+    vec3(0.0, 0.0, -1.0),
+    vec3(-1.0, 0.0, 0.0),
+    vec3(0.0, 0.0, 1.0),
+    vec3(1.0, 0.0, 0.0),
+    vec3(0.0, 1.0, 0.0),
+    vec3(0.0, -1.0, 0.0)
 );
 
 const vec3 cube[8] = vec3[](
@@ -101,21 +110,19 @@ mat3 rotat(vec3 pos, float yaw, float pitch) {
 
     // precombined rotation matrices
     // 
-    // mat4 ry = mat4(
-    //     -yc, 0.0, -ys, 0.0,
-    //     0.0, 1.0, 0.0, 0.0,
-    //     ys, 0.0, -yc, 0.0,
-    //     0.0, 0.0, 0.0, 1.0
+    // mat3 ry = mat3(
+    //     -yc, 0.0, -ys,
+    //     0.0, 1.0, 0.0,
+    //     ys, 0.0, -yc
     // );
     // 
-    // mat4 rp = mat4(
-    //     1.0, 0.0, 0.0, 0.0,
-    //     0.0, pc, -ps, 0.0,
-    //     0.0, ps, pc, 0.0,
-    //     0.0, 0.0, 0.0, 1.0
+    // mat3 rp = mat3(
+    //     1.0, 0.0, 0.0,
+    //     0.0, pc, -ps,
+    //     0.0, ps, pc
     // );
     // 
-    // mat4 rr = ry * rp;
+    // mat3 rr = ry * rp;
 
     return rr;
 }
@@ -131,7 +138,7 @@ vec3 positionQuad(vec3 pos) {
     // int blockId = gl_VertexID/24;
 
     // construct quad
-    vec3 pos_new = quad[vertId];
+    vec3 pos_new = QUAD[vertId];
 
     // orient quad
     pos_new = orientQuad(pos_new, quadId % 6); // 6 quads per cube
@@ -158,16 +165,25 @@ void main() {
 
     // compute ship mesh position
     vec3 ship_pos = positionQuad(Position);
+    
+    mat3 rotation_matrix = rotat(ship_pos, float(y)/3600.0, float(p)/3600.0);
     // apply rotation
-    ship_pos = rotat(ship_pos, float(y)/3600.0, float(p)/3600.0) * ship_pos + Position;
+    ship_pos = rotation_matrix * ship_pos + Position;
+
+    vec3 normal = normals[gl_VertexID/4 % 6];
+    // apply rotation to normal
+    normal = rotation_matrix * normal;
+
+    vec4 mlight = minecraft_mix_light(Light0_Direction, Light1_Direction, normal, vec4(1.0));
 
     // adjust UVs for ship texture atlas
     bool bottom_verts = gl_VertexID % 4 == 1 || gl_VertexID % 4 == 2;
+    // alternative: (gl_VertexID % 4 < 2)
     vec2 new_uv = vec2(UV0.x, UV0.y-0.0078125*float(bottom_verts)); // 2/256 offset for bottom verts to hide data line
 
     // select between ship and vanilla position
     vec3 pos = mix(Position, ship_pos, idb);
-    col = mix(col, vec4(1.0), idb);
+    col = mix(col, mlight, idb);
     vec2 uv = mix(UV0, new_uv, idb);
     
     // final transformations
