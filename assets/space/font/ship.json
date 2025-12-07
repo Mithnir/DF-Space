@@ -11,6 +11,15 @@
                 "IJKL",
                 "MNOP"
             ]
+        },
+        {
+            "type": "bitmap",
+            "file": "space:font/blank.png",
+            "ascent": 0,
+            "height": 0,
+            "chars": [
+                "_"
+            ]
         }
     ]
 }
