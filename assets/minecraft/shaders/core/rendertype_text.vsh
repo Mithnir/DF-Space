@@ -9,8 +9,6 @@ in vec3 Position;
 in vec4 Color;
 in vec2 UV0;
 in ivec2 UV2;
-in vec3 Normal;
-in float Time;
 
 uniform sampler2D Sampler0;
 uniform sampler2D Sampler2;
@@ -20,10 +18,18 @@ out float cylindricalVertexDistance;
 out vec4 vertexColor;
 out vec2 texCoord0;
 
-#define HEX_C1 193.0/255.0
+// width height depth
+const ivec3 SHIP_SIZE = ivec3(5, 5, 5);
+const vec3 SHIP_CENTER = vec3(SHIP_SIZE) * 0.5;
+const int TEX_SIZE = 16;
+
+const float HEX_C1 = 193.0/255.0;
+const vec3 SHIP_HEX_COLOR = vec3(HEX_C1, 0.0, 0.0);
 
 const float PI = 3.141593;
 const float TWO_PI = 6.283185;
+
+const float TO_RADS = PI/1800.0;
 
 const vec3 QUAD[4] = vec3[](
     vec3(1.0, 1.0, 0.0),
@@ -32,7 +38,7 @@ const vec3 QUAD[4] = vec3[](
     vec3(0.0, 1.0, 0.0)
 );
 
-const vec3 normals[6] = vec3[](
+const vec3 NORMALS[6] = vec3[](
     vec3(0.0, 0.0, -1.0),
     vec3(-1.0, 0.0, 0.0),
     vec3(0.0, 0.0, 1.0),
@@ -41,16 +47,15 @@ const vec3 normals[6] = vec3[](
     vec3(0.0, -1.0, 0.0)
 );
 
-const vec3 cube[8] = vec3[](
-    vec3(0.0, 0.0, 0.0),
-    vec3(1.0, 0.0, 0.0),
-    vec3(1.0, 1.0, 0.0),
-    vec3(0.0, 1.0, 0.0),
-    vec3(0.0, 0.0, 1.0),
-    vec3(1.0, 0.0, 1.0),
-    vec3(1.0, 1.0, 1.0),
-    vec3(0.0, 1.0, 1.0)
+const ivec2 UV_OFFSET[4] = ivec2[](
+    ivec2(0, 0),
+    ivec2(0, TEX_SIZE),
+    ivec2(TEX_SIZE-1, TEX_SIZE),
+    ivec2(TEX_SIZE-1, 0)
 );
+
+const bool TOP_VERTS[4] = bool[](1, 0, 0, 1);
+const bool BOTTOM_VERTS[4] = bool[](0, 1, 1, 0);
 
 vec3 orientQuad(vec3 pos, int quadId) {
     switch(quadId) {
@@ -64,42 +69,30 @@ vec3 orientQuad(vec3 pos, int quadId) {
     }
 }
 
-    // data blocks
-    // 0xFF 0xFF 0xFF 0xFF
+// decode yaw and pitch from color
+void unpackColor(in vec4 color, out float yaw, out float pitch) {
+    int r0 = int(color.r*255)<<4;           // red
 
-    // data distribution
-    // yaw pitch offset
-    // FFF FFF   FF
+    int g0 = int(color.g*255)>>4;           // green
+    int g1 = int(mod(color.g*255.0, 16.0)); //
 
-    // yaw       | pitch
-    // 16 - 4095 | 0
-    // 0 - 15    | 256 - 4095
-    // 0         | 0 - 255
+    int b0 = int(color.b*255)<<4;           // blue
 
-void unpackColor(in vec4 color, out int yaw, out int pitch) {
-    int y1 = int(color.r*255)<<4;           // red
-    int y0 = int(color.g*255)>>4;           // split green
-    int p1 = int(mod(color.g*255.0, 16.0)); // -
-    int p0 = int(color.b*255)<<4;           // blue
-    // int o0 = int(color.a*255);              // alpha
+    // int a0 = int(color.a*255);              // alpha
 
-    // combine parts to get full values
-    yaw = y0+y1;
-    pitch = p0+p1;
+    // combine parts and convert to radians
+    yaw = float(r0+g0)*TO_RADS;
+    pitch = float(g0+b0)*TO_RADS;
 }
 
-// pitchition to rename yaw to yitch
-mat3 rotat(vec3 pos, float yaw, float pitch) {
-
+// rotation matrix from yaw (y axis) and pitch (x axis)
+mat3 rotateYawPitch(float yaw, float pitch) {
     // precompute sin and cos
-    float yp = TWO_PI*float(yaw);
-    float pp = TWO_PI*float(pitch);
+    float yc = cos(yaw);
+    float ys = sin(yaw);
 
-    float yc = cos(yp);
-    float ys = sin(yp);
-
-    float pc = cos(pp);
-    float ps = sin(pp);
+    float pc = cos(pitch);
+    float ps = sin(pitch);
 
     // combined rotation matrix
     mat3 rr = mat3(
@@ -108,83 +101,70 @@ mat3 rotat(vec3 pos, float yaw, float pitch) {
         pc*ys, ps, -pc*yc
     );
 
-    // precombined rotation matrices
-    // 
-    // mat3 ry = mat3(
-    //     -yc, 0.0, -ys,
-    //     0.0, 1.0, 0.0,
-    //     ys, 0.0, -yc
-    // );
-    // 
-    // mat3 rp = mat3(
-    //     1.0, 0.0, 0.0,
-    //     0.0, pc, -ps,
-    //     0.0, ps, pc
-    // );
-    // 
-    // mat3 rr = ry * rp;
-
     return rr;
 }
 
-vec3 calculateNormals(vec3 pos) {
-    int vertId = gl_VertexID % 4;
-    return vec3(0.0,0.0,0.0);
-}
-
-vec3 positionQuad(vec3 pos) {
-    int vertId = gl_VertexID % 4;
-    int quadId = gl_VertexID/4;
-    // int blockId = gl_VertexID/24;
+// calculate vertex position and normal for ship mesh
+void shipPosition(out vec3 pos, out vec3 normal) {
+    int vertId = gl_VertexID % 4; // vertex in quad
+    int quadId = gl_VertexID/4; // quad in ship mesh
+    int faceId = quadId % 6; // face in cube
+    int cubeId = quadId / 6; // cube in ship mesh
 
     // construct quad
     vec3 pos_new = QUAD[vertId];
 
     // orient quad
-    pos_new = orientQuad(pos_new, quadId % 6); // 6 quads per cube
+    pos_new = orientQuad(pos_new, faceId); // 6 quads per cube
     
     // offset cube
-    pos_new.x += float(quadId / 6);
+    // TODO: fix this
+    // ai made this, pretty sure this is completely wrong, will rewrite when i get to it
+    ivec3 cube_offset = ivec3(
+        cubeId % SHIP_SIZE.x,
+        cubeId / (SHIP_SIZE.x * SHIP_SIZE.z) % SHIP_SIZE.y,
+        (cubeId / SHIP_SIZE.x) % SHIP_SIZE.z
+    );
+     // center ship around origin
+    pos_new += cube_offset - SHIP_CENTER;
+    
+    // unpack vertex color into yaw and pitch
+    float y;
+    float p;
+    unpackColor(Color, y, p);
+    mat3 rotation_matrix = rotateYawPitch(y, p); // get rotation matrix
 
-    return pos_new;
+    normal = rotation_matrix * NORMALS[faceId]; // rotate normal vector
+    pos = rotation_matrix * pos_new + Position; // rotate and translate position
+}
+
+bool filterVertex(vec3 hex_key, vec2 uv, int vertId, int data) {
+    ivec2 o = ivec2(uv*256.0)-UV_OFFSET[vertId];
+    o.x += int(mod(o.x, 2)); // align to even texel (fix for nvidia graphics buffer bug i hope)
+    o.x += 2*data; // offset for data lines in texture atlas
+    vec4 Id = texelFetch(Sampler0, o, 0);
+    return Id.rgb == hex_key;
 }
 
 void main() {
-    // vec4 color = texture(Sampler0, UV0);
-    // vec3 pos = Position;
-    
-    vec4 Id = texelFetch(Sampler0, ivec2(17, 17), 0);
-    float idb = float(Id.r == HEX_C1);
-
     vec4 col = Color * texelFetch(Sampler2, UV2 / 16, 0);
-    
-    // unpack vertex color into yaw and pitch
-    int y;
-    int p;
-    unpackColor(Color, y, p);
 
-    // compute ship mesh position
-    vec3 ship_pos = positionQuad(Position);
-    
-    mat3 rotation_matrix = rotat(ship_pos, float(y)/3600.0, float(p)/3600.0);
-    // apply rotation
-    ship_pos = rotation_matrix * ship_pos + Position;
+    // compute ship mesh position and normals
+    vec3 ship_pos;
+    vec3 normal;
+    shipPosition(ship_pos, normal); // get mesh position in local space
 
-    vec3 normal = normals[gl_VertexID/4 % 6];
-    // apply rotation to normal
-    normal = rotation_matrix * normal;
-
-    vec4 mlight = minecraft_mix_light(Light0_Direction, Light1_Direction, normal, vec4(1.0));
+    vec4 mlight = minecraft_mix_light(Light0_Direction, Light1_Direction, normal, vec4(1.0)); // apply lighting
 
     // adjust UVs for ship texture atlas
-    bool bottom_verts = gl_VertexID % 4 == 1 || gl_VertexID % 4 == 2;
-    // alternative: (gl_VertexID % 4 < 2)
-    vec2 new_uv = vec2(UV0.x, UV0.y-0.0078125*float(bottom_verts)); // 2/256 offset for bottom verts to hide data line
+    bool top_half = TOP_VERTS[gl_VertexID % 4]; // top two verts of quad
+    vec2 new_uv = vec2(UV0.x, UV0.y+0.0078125*float(top_half)); // 2/256 offset for bottom verts to hide data line
 
-    // select between ship and vanilla position
-    vec3 pos = mix(Position, ship_pos, idb);
-    col = mix(col, mlight, idb);
-    vec2 uv = mix(UV0, new_uv, idb);
+    // select between ship and vanilla data
+    float is_ship = float(filterVertex(SHIP_HEX_COLOR, UV0, gl_VertexID % 4, 0)); // check if vertex is part of ship mesh
+    vec3 pos = mix(Position, ship_pos, is_ship);
+    col = mix(col, mlight, is_ship);
+    vec2 uv = mix(UV0, new_uv, is_ship);
     
     // final transformations
     gl_Position = ProjMat * ModelViewMat * vec4(pos, 1.0);
