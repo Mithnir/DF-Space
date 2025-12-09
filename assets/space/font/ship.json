@@ -3,13 +3,13 @@
         {
             "type": "bitmap",
             "file": "space:font/ship_atlas.png",
-            "ascent": 6,
+            "ascent": 0,
             "height": 16,
             "chars": [
-                "ABCD",
-                "EFGH",
-                "IJKL",
-                "MNOP"
+                "ABCDEFGHIJKLMNOP",
+                "QRSTUVWXYZabcdef",
+                "ghijklmnopqrstuv",
+                "wxyz0123456789!?"
             ]
         },
         {
